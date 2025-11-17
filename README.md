@@ -42,4 +42,4 @@
 
 ## 📦 部署地址
 
-`https://<your-username>.github.io/photo-album/`
+`https://guangmingcunliutao.github.io/photo-album/`

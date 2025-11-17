@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useUserPhotos } from '@/composables/useUserPhotos'
+import { useTransitionEffect } from '@/composables/useTransitionEffect'
 
 const staticModules = import.meta.glob('@/assets/photos/**/*.{jpg,jpeg,png,gif,webp}', {
   eager: true,
@@ -17,10 +18,26 @@ const staticPhotoPaths = computed(() => {
   return paths.sort()
 })
 
-const { userPhotos } = useUserPhotos()
+const { userPhotos, removePhotoByUrl } = useUserPhotos()
 
-const photoPaths = computed(() => [...userPhotos.value, ...staticPhotoPaths.value])
-const hasPhotos = computed(() => photoPaths.value.length > 0)
+const photoItems = computed(() => {
+  const userItems = userPhotos.value.map((url, index) => ({
+    url,
+    isUser: true,
+    key: `user-${index}-${url}`,
+  }))
+
+  const staticItems = staticPhotoPaths.value.map((url) => ({
+    url,
+    isUser: false,
+    key: `static-${url}`,
+  }))
+
+  return [...userItems, ...staticItems]
+})
+
+const photoPaths = computed(() => photoItems.value.map((item) => item.url))
+const hasPhotos = computed(() => photoItems.value.length > 0)
 
 const currentIndex = ref(-1)
 const isViewerOpen = ref(false)
@@ -29,6 +46,9 @@ const autoPlayDelay = 3500
 let autoPlayTimer: number | null = null
 
 const touchStartX = ref<number | null>(null)
+
+const { currentEffect } = useTransitionEffect()
+const showSettingsMenu = ref(false)
 
 const openViewer = (index: number) => {
   currentIndex.value = index
@@ -96,26 +116,94 @@ const handleTouchEnd = (event: TouchEvent) => {
   touchStartX.value = null
 }
 
+const toggleSettingsMenu = () => {
+  showSettingsMenu.value = !showSettingsMenu.value
+}
+
+const closeSettingsMenu = () => {
+  showSettingsMenu.value = false
+}
+
+const effectOptions = [
+  { value: 'fade' as const, label: '淡进淡出', icon: '✨' },
+  { value: 'slide' as const, label: '滑动', icon: '➡️' },
+  { value: 'zoom' as const, label: '缩放', icon: '🔍' },
+  { value: 'rotate' as const, label: '旋转', icon: '🔄' },
+  { value: 'flip' as const, label: '翻转', icon: '🔄' },
+]
+
+const { setEffect } = useTransitionEffect()
+
+const selectEffect = (effect: typeof effectOptions[number]['value']) => {
+  setEffect(effect)
+  closeSettingsMenu()
+}
+
+const handleClickOutside = (event: MouseEvent) => {
+  if (showSettingsMenu.value) {
+    const target = event.target as HTMLElement
+    if (!target.closest('.settings-wrapper')) {
+      closeSettingsMenu()
+    }
+  }
+}
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
+  document.addEventListener('click', handleClickOutside)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  document.removeEventListener('click', handleClickOutside)
   stopAutoPlay()
 })
+
+const isUserPhoto = (index: number) => photoItems.value[index]?.isUser === true
+
+const handleRemoveUserPhoto = (url: string) => {
+  if (!confirm('确定删除这张上传的照片吗？')) return
+  removePhotoByUrl(url)
+  if (isViewerOpen.value && currentIndex.value >= 0) {
+    const currentUrl = photoPaths.value[currentIndex.value]
+    if (currentUrl === url) {
+      closeViewer()
+    }
+  }
+}
+
+watch(
+  () => photoPaths.value.length,
+  () => {
+    if (!photoPaths.value.length) {
+      closeViewer()
+      return
+    }
+    if (currentIndex.value >= photoPaths.value.length) {
+      currentIndex.value = photoPaths.value.length - 1
+    }
+  }
+)
 </script>
 
 <template>
   <div class="photo-grid" :class="{ empty: !hasPhotos }">
     <transition-group name="grid" tag="div" class="photo-grid__inner">
       <div
-        v-for="(url, index) in photoPaths"
-        :key="url"
+        v-for="(item, index) in photoItems"
+        :key="item.key"
         class="photo-item"
         @click="openViewer(index)"
       >
-        <img :src="url" loading="lazy" decoding="async" />
+        <img :src="item.url" loading="lazy" decoding="async" />
+        <button
+          v-if="item.isUser"
+          class="thumb-remove"
+          @click.stop="handleRemoveUserPhoto(item.url)"
+          aria-label="删除照片"
+        >
+          ×
+        </button>
       </div>
     </transition-group>
     <p v-if="!hasPhotos" class="empty-state">暂时没有照片，快去上传吧～</p>
@@ -139,13 +227,45 @@ onUnmounted(() => {
         </button>
 
         <div class="toolbar">
-          <button class="toggle" @click="isAutoPlay = !isAutoPlay">
-            <span v-if="isAutoPlay">⏸ 自动</span>
-            <span v-else>▶️ 自动</span>
-          </button>
+          <div class="toolbar-group">
+            <button class="toggle" @click="isAutoPlay = !isAutoPlay">
+              <span v-if="isAutoPlay">⏸ 自动</span>
+              <span v-else>▶️ 自动</span>
+            </button>
+            <div class="settings-wrapper">
+              <button class="toggle settings-btn" @click.stop="toggleSettingsMenu">
+                ⚙️ 特效
+              </button>
+              <transition name="menu">
+                <div v-if="showSettingsMenu" class="settings-menu" @click.stop>
+                  <div class="menu-header">切换特效</div>
+                  <div class="menu-items">
+                    <button
+                      v-for="option in effectOptions"
+                      :key="option.value"
+                      class="menu-item"
+                      :class="{ active: currentEffect === option.value }"
+                      @click="selectEffect(option.value)"
+                    >
+                      <span class="menu-icon">{{ option.icon }}</span>
+                      <span class="menu-label">{{ option.label }}</span>
+                      <span v-if="currentEffect === option.value" class="menu-check">✓</span>
+                    </button>
+                  </div>
+                </div>
+              </transition>
+            </div>
+            <button
+              v-if="currentIndex >= 0 && isUserPhoto(currentIndex)"
+              class="toggle danger"
+              @click.stop="handleRemoveUserPhoto(photoPaths[currentIndex])"
+            >
+              删除
+            </button>
+          </div>
         </div>
 
-        <transition name="fade" mode="out-in">
+        <transition :name="currentEffect" mode="out-in">
           <img
             v-if="currentIndex >= 0"
             :key="currentIndex"
@@ -211,6 +331,26 @@ onUnmounted(() => {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.thumb-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.75);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.photo-item:hover .thumb-remove {
+  opacity: 1;
 }
 
 .empty-state {
@@ -290,6 +430,12 @@ onUnmounted(() => {
   gap: 10px;
 }
 
+.toolbar-group {
+  display: flex;
+  gap: 10px;
+  position: relative;
+}
+
 .toggle {
   border: none;
   border-radius: 999px;
@@ -298,6 +444,95 @@ onUnmounted(() => {
   color: #fff;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+  backdrop-filter: blur(6px);
+}
+
+.toggle:hover {
+  background: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+.toggle.danger {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+.toggle.danger:hover {
+  background: rgba(239, 68, 68, 0.35);
+}
+
+.settings-wrapper {
+  position: relative;
+}
+
+.settings-menu {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  right: 0;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(12px);
+  border-radius: 16px;
+  padding: 8px;
+  min-width: 160px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  z-index: 1001;
+}
+
+.menu-header {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 4px;
+}
+
+.menu-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+  text-align: left;
+  width: 100%;
+  font-size: 14px;
+}
+
+.menu-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.menu-item.active {
+  background: rgba(255, 126, 179, 0.2);
+  color: #ff7eb3;
+}
+
+.menu-icon {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+}
+
+.menu-label {
+  flex: 1;
+}
+
+.menu-check {
+  color: #ff7eb3;
+  font-weight: bold;
 }
 
 @media (max-width: 640px) {
@@ -321,15 +556,79 @@ onUnmounted(() => {
   }
 }
 
+/* 淡进淡出 */
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.35s ease, transform 0.35s ease;
+  transition: opacity 0.4s ease, transform 0.4s ease;
 }
 
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
-  transform: scale(0.97);
+  transform: scale(0.98);
+}
+
+/* 滑动 */
+.slide-enter-active {
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.5s ease;
+}
+
+.slide-leave-active {
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.5s ease;
+}
+
+.slide-enter-from {
+  opacity: 0;
+  transform: translateX(100px);
+}
+
+.slide-leave-to {
+  opacity: 0;
+  transform: translateX(-100px);
+}
+
+/* 缩放 */
+.zoom-enter-active,
+.zoom-leave-active {
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.5s ease;
+}
+
+.zoom-enter-from,
+.zoom-leave-to {
+  opacity: 0;
+  transform: scale(0.7);
+}
+
+/* 旋转 */
+.rotate-enter-active,
+.rotate-leave-active {
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.6s ease;
+}
+
+.rotate-enter-from {
+  opacity: 0;
+  transform: rotate(-180deg) scale(0.8);
+}
+
+.rotate-leave-to {
+  opacity: 0;
+  transform: rotate(180deg) scale(0.8);
+}
+
+/* 翻转 */
+.flip-enter-active,
+.flip-leave-active {
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
+}
+
+.flip-enter-from {
+  opacity: 0;
+  transform: rotateY(-90deg) scale(0.9);
+}
+
+.flip-leave-to {
+  opacity: 0;
+  transform: rotateY(90deg) scale(0.9);
 }
 
 .grid-enter-active,
@@ -351,5 +650,17 @@ onUnmounted(() => {
 .overlay-enter-from,
 .overlay-leave-to {
   opacity: 0;
+}
+
+/* 菜单过渡动画 */
+.menu-enter-active,
+.menu-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.menu-enter-from,
+.menu-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.95);
 }
 </style>

@@ -38,10 +38,23 @@ export const useUserPhotos = () => {
     persist()
   }
 
+  const removePhoto = (index: number) => {
+    if (index < 0 || index >= userPhotos.value.length) return
+    userPhotos.value = userPhotos.value.filter((_, idx) => idx !== index)
+    persist()
+  }
+
+  const removePhotoByUrl = (url: string) => {
+    userPhotos.value = userPhotos.value.filter((item) => item !== url)
+    persist()
+  }
+
   return {
     userPhotos,
     addPhotos,
     clearPhotos,
+    removePhoto,
+    removePhotoByUrl,
     reload: loadFromStorage,
   }
 }
